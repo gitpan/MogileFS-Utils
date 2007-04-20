@@ -1,7 +1,15 @@
-  - patch from Arthur Bebak <abebak@fabrikinc.com> to add "listkey" to mogtool
+2.08 -- 2007-04-20
+
+  * stats command from Leon Brocard
+
+  * fsck commands
+
+  * improved docs
+
+  * patch from Arthur Bebak <abebak@fabrikinc.com> to add "listkey" to mogtool
 
 1.50 -- 2006-11-13
 
-   - much-cleaned up and friendlier mogadm command
+  * much-cleaned up and friendlier mogadm command
 
 

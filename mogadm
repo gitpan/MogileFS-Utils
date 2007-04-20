@@ -7,10 +7,13 @@ use Getopt::Long;
 use LWP::Simple;  # FIXME: use of this makes 'mog check' hang too long when multiple things down
 use Socket;
 
-my @topcmds = qw(check host device domain class slave);
+my @topcmds = qw(check stats host device domain class slave fsck);
 my $usage = {
     check => {
         des => "Check the state of the MogileFS world.",
+    },
+    stats => {
+        des => "Show MogileFS system statistics.",
     },
     host => {
         des => "Add/modify hosts.",
@@ -174,6 +177,37 @@ my $usage = {
             },
         },
     },
+    fsck => {
+        des => "Control a background filesystem check operation.",
+        subcmd => {
+            start => {
+                des => 'Start (or resume) background fsck',
+            },
+            stop => {
+                des => 'Stop (pause) background fsck',
+            },
+            status => {
+                des => 'Show fsck status',
+            },
+            reset => {
+                des => 'Reset fsck position back to the beginning',
+                args => '[opts]',
+                opts => {
+                    '--policy-only' => "Check repl policy (assumed locations); don't stat storage nodes",
+                }
+            },
+            clearlog => {
+                des => 'Clear the fsck log',
+            },
+            printlog => {
+                des => 'Display the fsck log',
+            },
+            taillog => {
+                des => 'Tail the fsck log',
+            },
+
+        },
+    },
 };
 
 # load up our config files
@@ -225,6 +259,9 @@ eval "use MogileFS::Admin; use MogileFS::Client; 1;" or fail_text('cant_find_mod
 if ($topcmd eq 'check') {
     die "Unknown options/arguments to 'check' command.\n" if @ARGV;
     cmd_check();
+} elsif ($topcmd eq 'stats') {
+    die "Unknown options/arguments to 'stats' command.\n" if @ARGV;
+    cmd_stats();
 }
 
 # get the verb
@@ -272,7 +309,8 @@ if (my $opts = $cmdinfo->{opts}) {
         my $k = $_;
         next if $k =~ /^</;  # don't care about these.
         die "BOGUS KEY: '$k'" unless $k =~ /^--([\w\-]+)(=.+)?$/;
-        $getopts{"$1$2"} = \$cmdargs{$1};
+        my ($oname, $type) = ($1, $2 || "");
+        $getopts{"$oname$type"} = \$cmdargs{$1};
     }
     GetOptions(%getopts)
         or abort_with_topcmd_help($topcmd, $verb);
@@ -389,6 +427,52 @@ sub cmd_check {
     printf "             total:%10.3f %10.3f %10.3f %6.2f%%\n", (map { $total{$_} } qw(total used avail)), $pct;
 
     # if we get here, all's well
+    ok();
+}
+
+sub cmd_stats {
+    print "Fetching statistics...\n";
+    my $stats = stats()
+        or fail("Can't fetch stats");
+
+    print "\nStatistics for devices...\n";
+    printf "  %-10s %-10s %10s %10s\n", "device", "host", "files", "status";
+    printf "  ---------- ----------- ---------- ----------\n";
+    foreach my $device (sort { $a <=> $b } keys %{$stats->{devices}}) {
+        my $value = $stats->{devices}->{$device};
+        printf "  %-10s %-10s %10s %10s\n", "dev$device", $value->{host}, $value->{files}, $value->{status};
+    }
+    printf "  ---------- ----------- ---------- ----------\n";
+
+    print "\nStatistics for file ids...\n";
+    printf "  Max file id: %s\n", $stats->{fids}->{max};
+
+    print "\nStatistics for files...\n";
+    printf "  %-20s %-10s %10s\n", 'domain', 'class', 'files';
+    printf "  -------------------- ----------- ----------\n";
+    foreach my $domain (sort keys %{$stats->{files}}) {
+        my $classes = $stats->{files}->{$domain};
+        foreach my $class (sort keys %$classes) {
+            my $files = $classes->{$class};
+            printf "  %-20s %-10s %10s\n", $domain, $class, $files;
+        }
+    }
+    printf "  -------------------- ----------- ----------\n";
+
+    print "\nStatistics for replication...\n";
+    printf "  %-20s %-10s %10s %10s\n", 'domain', 'class', 'devcount', 'files';
+    printf "  -------------------- ----------- ---------- ----------\n";
+    foreach my $domain (sort keys %{$stats->{replication}}) {
+        my $classes = $stats->{replication}->{$domain};
+        foreach my $class (sort keys %$classes) {
+            my $devcounts = $classes->{$class};
+            foreach my $devcount (sort { $a <=> $b } keys %$devcounts) {
+                my $files = $devcounts->{$devcount};
+                printf "  %-20s %-10s %10s %10s\n", $domain, $class, $devcount, $files;
+            }
+        }
+    }
+    printf "  -------------------- ----------- ---------- ----------\n";
     ok();
 }
 
@@ -740,6 +824,124 @@ sub cmd_slave_delete {
     }
 }
 
+sub cmd_fsck_start {
+    my $mogadm = mogadm();
+    my $res = $mogadm->fsck_start || fail($mogadm->errstr);
+    ok("fsck started");
+}
+
+sub cmd_fsck_stop {
+    my $mogadm = mogadm();
+    my $res = $mogadm->fsck_stop || fail($mogadm->errstr);
+    ok("fsck stopped");
+}
+
+sub cmd_fsck_reset {
+    my $mogadm = mogadm();
+    my $args = shift;
+    my $res = $mogadm->fsck_reset(
+                                  policy_only => $args->{"policy-only"},
+                                  )
+        or fail($mogadm->errstr);
+    ok("fsck stopped");
+}
+
+sub cmd_fsck_clearlog {
+    my $mogadm = mogadm();
+    my $res = $mogadm->fsck_clearlog || fail($mogadm->errstr);
+    ok("fsck log cleared");
+}
+
+sub _log_dump {
+    my %opts   = @_;
+    my $max    = $opts{start};
+    my $mogadm = mogadm();
+
+    my $fmt = "%-20s %5s %13s %10s\n";
+    printf($fmt, "unixtime", "event", "fid", "devid");
+    while (1) {
+        my @rows = $mogadm->fsck_log_rows(after_logid => $max);
+        unless (@rows) {
+            $opts{on_stall}->();
+            next;
+        }
+        foreach my $row (@rows) {
+            printf($fmt,
+                   $row->{utime},
+                   $row->{evcode},
+                   $row->{fid},
+                   $row->{devid} || "-");
+            $max = $row->{logid};
+        }
+    }
+}
+
+sub cmd_fsck_printlog {
+    _log_dump(start     => 0,
+              on_stall => sub { exit 0; });
+}
+
+sub cmd_fsck_taillog {
+    my $mogadm = mogadm();
+    my $status = $mogadm->fsck_status
+        or fail("can't get fsck status");
+    _log_dump(start     => $status->{max_logid} - 20,
+              on_stall => sub { sleep 5; });
+}
+
+sub cmd_fsck_status {
+    my $mogadm = mogadm();
+    my $status = $mogadm->fsck_status
+        or fail("can't get fsck status");
+
+    my %known = map { $_ => 1 } qw(
+                                   current_time
+                                   max_logid
+                                   );
+    my $st = sub {
+        my $k = shift;
+        $known{$k} = 1;
+        return $status->{$k};
+    };
+
+    my $line = sub {
+        printf("%11s: %-s\n", @_);
+    };
+    print "\n";
+    my $host = $st->('host');
+    $line->("Running", $st->('running') ? "Yes (on $host)" : "No");
+
+    my $ratio = $st->('end_fid') ? ($st->('max_fid_checked') / $st->('end_fid')) : 0;
+    my $perc  = sprintf("%0.02f%%", 100 * $ratio);
+
+    $line->("Status",
+            $st->('max_fid_checked') . " / " . $st->('end_fid')
+            . " ($perc)");
+    my $elap = ($st->('stop_time') || $st->('current_time')) - $st->('start_time');
+    my $as_time = sub {
+        my $s = shift;
+        return int($s) . "s" if $s < 60;
+        return int($s/60) . "m";
+    };
+    my $per_sec = 5;
+    $line->("Time",  sprintf("%s (%d fids/s; %s remain)",
+                             $as_time->($elap),
+                             $per_sec,
+                             $as_time->($elap * (1 - $ratio))));
+
+    $line->("Check Type", ($st->('policy_only') ?
+                           "Repl policy only (skip file checks)" :
+                           "Normal (check policy + files)"));
+
+    if (my @unk = grep { !$known{$_} } sort keys %$status) {
+        print "\n";
+        foreach (@unk) {
+            $line->("[$_]", $status->{$_});
+        }
+    }
+    print "\n";
+}
+
 ###########################################################################
 ## helper routines
 ###########################################################################
@@ -896,6 +1098,16 @@ sub mogadm {
     return $mogadm;
 }
 
+sub stats {
+    my $mogadm = shift() || mogadm();
+    my $res;
+    eval {
+        $res = $mogadm->get_stats();
+    };
+    return undef if $@;
+    return $res;
+}
+    
 sub hosts_byname {
     my $mogadm = shift() || mogadm();
     fail_text('no_mogadm') unless $mogadm;
@@ -979,7 +1191,12 @@ mogadm - MogileFS admin tool
 
 =head1 SYNOPSIS
 
-mogadm [config options] <argument(s)> [argument options]
+ $ mogadm [config options] <argument(s)> [argument options]
+
+ $ mogadm
+   ....
+   (prints contextual help, if missing command/arguments)
+   ...
 
 =head1 OPTIONS
 
@@ -1054,6 +1271,18 @@ a domain unless it has no classes and is devoid of files.
 Commands for working with classes.  Please see the L</"CLASS OPTIONS"> section
 for the options to use with add/modify.  Also, delete requires that the class
 have no files in it before it will allow the deletion.
+
+=item B<slave ...>
+
+Add/remove slaves replicating from MogileFS master database.
+
+Run B<mogadm slave> by itself for contextual help.
+
+=item B<fsck ...>
+
+Control a background filesystem check operation.
+
+Run B<mogadm fsck> by itself for contextual help.
 
 =back
 
@@ -1136,29 +1365,43 @@ Class manipulation
 Check the status of your entire MogileFS system:
 
     $ mogadm check
+    
+Check MogileFS system statistics:
+
+    $ mogadm stats
+
+See all the things mogadm can do:
+
+    $ mogadm
+
+Get help on a sub-command:
+
+    $ mogadm device
+
 
 =head1 CONFIGURATION
 
-It is recommended that you create a configuration file such as C</etc/mogilefs/mogilefs.conf> to
+It is recommended that you create a configuration file such as C</etc/mogilefs/mogilefs.conf> (or at C<~/.mogilefs.conf>) to
 be used for configuration information.  Basically all you need is something like:
 
-    lib = /home/mogilefs/cgi-bin
     trackers = 10.0.0.23:7001, 10.0.0.15:7001
 
-The C<lib> directive needs to point to the directory containing under
-it the relative file C<MogileFS/Admin.pm>.  The trackers directive
-points us at the proper location for finding your trackers.
+    # if MogileFS::Admin files aren't installed in standard places:
+    lib = /home/mogilefs/cgi-bin
 
 Note that these can also be specified on the command line, as per above.
 
 =head1 AUTHOR
 
-Mark Smith E<lt>L<"junior@danga.com">E<gt>.
-Brad Fitzpatrick E<lt>L<"brad@danga.com">E<gt>.
+Brad Fitzpatrick E<lt>L<brad@danga.com>E<gt>
+
+Mark Smith E<lt>L<junior@danga.com>E<gt>
+
+Leon Brocard E<lt>L<acme@astray.com>E<gt>, open sourced permissions from Foxtons Ltd.
 
 =head1 BUGS
 
-Please report any on the MogileFS mailing list: L<"http://lists.danga.com/mogilefs/">.
+Please report any on the MogileFS mailing list: L<http://lists.danga.com/mogilefs/>.
 
 =head1 LICENSE
 
