@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-
+# vim:ts=4 sw=4 et ft=perl:
 eval 'exec /usr/bin/perl  -S $0 ${1+"$@"}'
     if 0; # not running under some shell
 ############################################################################
@@ -34,6 +34,9 @@ mogtool -- Inject/extract data to/from a MogileFS installation
     $ mogtool extract --bigfile thedevkey /dev/hda4
 
     $ mogtool delete thekey
+    
+    $ mogtool locate thekey
+    $ mogtool locate --verify --bigfile thekey 
 
     $ mogtool list
     $ mogtool listkey
@@ -89,6 +92,10 @@ for how to use extract.
 =item delete|rm
 
 Delete a resource.  See L</"DELETE OPTIONS"> and L</"DELETE ARGUMENTS">.
+
+=item locate|lo key
+
+List the paths to the file identified by the given key.
 
 =item list|ls
 
@@ -157,8 +164,6 @@ Specifies the number of concurrent processes to run for MogileFS insertion.  If
 you are noticing mogtool spend most of it's time waiting for children and not
 actually buffering data, you may wish to raise this number.  The default is 1
 but we've found 3 or 4 work well.
-
-=item
 
 =back
 
@@ -242,6 +247,48 @@ The resource is a "big file" and all chunks should be deleted.
 =item key
 
 Specifies the key of the file to delete.
+
+=back
+
+=head1 LOCATE OPTIONS
+
+=over 4
+
+=item --verify
+
+Verify that the returned paths actually contain the file.
+
+=item --bigfile|-b
+
+The resource is a "big file" and the locations of the information key should be printed.
+
+=back
+
+=head1 LOCATE ARGUMENTS
+
+=over 4
+
+=item key
+
+Specifies the key of the file to locate
+
+=back
+
+=head1 RETURN VALUES
+
+=over 4
+
+=item 0
+
+Sucess during operation.
+
+=item 1
+
+During the locate, list, or listkey operation, the key was not found.
+
+=item 2
+
+Some fatal error occured.
 
 =back
 
@@ -479,6 +526,8 @@ Mark Smith E<lt>junior@danga.comE<gt> - most of the implementation and maintenan
 
 Brad Fitzpatrick E<lt>brad@danga.comE<gt> - concepts and rough draft.
 
+Robin H. Johnson E<lt>robbat2@orbis-terrarum.netE<gt> - locate function.
+
 Copyright (c) 2002-2004 Danga Interactive. All rights reserved.
 
 =cut
@@ -496,7 +545,8 @@ use Compress::Zlib;
 
 $| = 1;
 
-use constant ERR_FATAL => 1;
+use constant ERR_MISSING => 1;
+use constant ERR_FATAL => 2;
 
 my %opts;
 $opts{help} = 0;
@@ -566,6 +616,7 @@ extract() if $cmd eq 'x' || $cmd eq "extract";
 list() if $cmd eq 'ls' || $cmd eq "list";
 listkey() if $cmd eq 'lsk' || $cmd eq "listkey";
 mdelete() if $cmd eq 'rm' || $cmd eq "delete";
+locate() if $cmd eq 'lo' || $cmd eq "locate";
 
 # fail if we get this far
 abortWithUsage();
@@ -596,24 +647,27 @@ sub get_mogfs {
 
 sub error {
     my $err = shift() || "ERROR: no error message provided!";
-    print STDERR "$err\n";
 
-    if (my $errstr = $mogfs->errstr) {
-        $errstr =~ s/^\s+//;
-        $errstr =~ s/\s+$//;
-        if ($errstr) {
-            print STDERR "MogileFS backend error message: $errstr\n";
-        }
+    my $mogerr = undef;    
+    if ($mogerr = $mogfs->errstr) {
+        $mogerr =~ s/^\s+//;
+        $mogerr =~ s/\s+$//;
     }
 
+    my $syserr = undef;
     if ($@) {
-        my $err = $@;
-        $err =~ s/[\r\n]+$//;
-        print STDERR "System error message: $@\n";
+        $syserr = $@;
+        $syserr =~ s/[\r\n]+$//;
     }
+    
+    my $exitcode = shift();
+    
+    print STDERR "$err\n";
+    print STDERR "MogileFS backend error message: $mogerr\n" if $mogerr && $exitcode != ERR_MISSING;
+    print STDERR "System error message: $@\n" if $syserr;
 
     # if a second argument, exit
-    if (defined (my $exitcode = shift())) {
+    if (defined ($exitcode)) {
         exit $exitcode+0;
     }
 }
@@ -1193,9 +1247,37 @@ sub extract {
     exit 0;
 }
 
+sub locate {
+    my $key = shift(@ARGV);
+    abortWithUsage() unless $key;
+    $opts{verify} = 1 unless $opts{verify};
+    $opts{bigfile} = 0 unless $opts{big};
+   
+    my $dkey = $key;
+    $dkey = "_big_info:$key" if $opts{big};
+    
+    # list all pathes for the file
+    my $ct = 0;
+    my @paths = [];
+    my @paths = grep { defined $_ } $mogfs->get_paths($dkey, $opts{verify} );
+    if(@paths == 0 && $mogfs->errstr =~ /unknown_key/) {
+        error("Error: bigfile $key doesn't exist (or did you force --bigfile?)", ERR_MISSING) if $opts{big};
+        error("Error: file $key doesn't exist (or did you forget --bigfile?)", ERR_MISSING);
+    }
+    error("Error: Something went wrong", ERR_FATAL) if($mogfs->errstr);
+    foreach my $key (@paths) {
+        $ct++;
+        print "$key\n";
+    }
+    print "#$ct paths found\n";
+    exit 0 if($ct > 0);
+    exit ERR_MISSING;
+}
+
 sub list {
     # list all big files in mogile
     my ($ct, $after, $list);
+    my $ct = 0;
     while (($after, $list) = $mogfs->list_keys("_big_info:", $after)) {
         last unless $list && @$list;
 
@@ -1210,7 +1292,8 @@ sub list {
         }
     }
     print "#$ct files found\n";
-    exit 0;
+    exit 0 if($ct > 0);
+    exit ERR_MISSING;
 }
 
 sub listkey {
@@ -1220,6 +1303,7 @@ sub listkey {
 
     # list all files matchine a key
     my ($ct, $after, $list);
+    $ct = 0;
     while (($after, $list) = $mogfs->list_keys("$key_pattern", $after)) {
         last unless $list && @$list;
 
@@ -1231,8 +1315,10 @@ sub listkey {
             print "$key\n";
         }
     }
+    error("Error: Something went wrong", ERR_FATAL) if ($mogfs->errstr && ! ($mogfs->errstr =~ /none_match/));
     print "#$ct files found\n";
-    exit 0;
+    exit 0 if($ct > 0);
+    exit ERR_MISSING;
 }
 
 sub mdelete {

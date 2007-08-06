@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#
+# vim:ts=4 sw=4 ft=perl et:
 
 use strict;
 use warnings;
@@ -86,6 +86,13 @@ my $usage = {
                     "--all"  => "Include dead devices in list.",
                 },
             },
+            summary => {
+                des => "List the summary of devices, for each host.",
+                args => "[opts]",
+                opts => {
+                    "--status=s"  => "Devices of status A. Defaults to 'alive,readonly'",
+                },
+            },
             add => {
                 des  => "Add a device to a host.",
                 args => "<hostname> <devid> [opts]",
@@ -96,12 +103,22 @@ my $usage = {
                 },
             },
             mark => {
-                des  => "Mark a device as {alive,dead,down,readonly}",
+                des  => "Mark a device as {alive,dead,down,drain,readonly}",
                 args => "<hostname> <devid> <status>",
                 opts => {
                     "<hostname>" => "Hostname of device",
                     "<devid>"    => "Numeric devid to modify.",
-                    "<status>"   => "One of {alive,dead,down,readonly}",
+                    "<status>"   => "One of {alive,dead,down,drain,readonly}",
+                },
+            },
+            modify => {
+                des => "Modify a device's propereties.",
+                args => "<hostname> <devid> [opts]",
+                opts => {
+                    "<hostname>" => "Hostname of device",
+                    "<devid>"    => "Numeric devid to modify.",
+                    "--status=s" => "One of {alive,dead,down,drain,readonly}",
+                    "--weight=i" => "Postive numeric weight for device",
                 },
             },
         },
@@ -411,6 +428,9 @@ sub cmd_check {
     printf "  host device      %10s %10s %10s %7s  %7s   %4s\n", 'size(G)', 'used(G)', 'free(G)', 'use% ', 'ob state', 'I/O%';
     printf "  ---- ------------ ---------- ---------- ---------- ------ ---------- -----\n";
     my %total;
+    # Initialize to zero so that the total outputs doesn't need to check for undefined.
+    map { $total{$_} = 0; } qw(total used avail);
+
     foreach my $hosturl (@urls) {
         my ($hostid, $url) = @$hosturl;
         my $devs = $devices->{$hostid};
@@ -424,6 +444,10 @@ sub cmd_check {
             my $usage = get($url . "/dev$devid/usage");
             if (defined $usage) {
                 my %data = ( map { split(/:\s+/, $_) } split(/\r?\n/, $usage) );
+                foreach (qw(time used total avail)) {
+                    $data{$_} = 0 if (!$data{$_} || 
+                                       $data{$_} !~ /\A\d+(\.\d+)?\Z/); 
+                }
                 $data{age} = $now - $data{time};
                 $data{used} /= 1024**2;
                 $data{total} /= 1024**2;
@@ -433,16 +457,21 @@ sub cmd_check {
                 $total{avail} += $data{avail};
                 $total{total} += $data{total};
 
+                $dev->{utilization}  = 0 if (!defined($dev->{utilization}) || 
+                                              $dev->{utilization} !~ /\A\d+(\.\d+)?\Z/);
                 printf("     %10.3f %10.3f %10.3f %6.2f%%  %-7s %5.1f\n",
                        (map { $data{$_} } qw(total used avail)),
                        $pct, ($dev->{observed_state} || "?"),
-                       ($dev->{utilization} || 0));
+                       $dev->{utilization});
             } else {
                 print "REQUEST FAILURE\n";
             }
         }
     }
-    my $pct = $total{used}/$total{total}*100;
+    my $pct = 0;
+    # Avoid division by zero
+    $pct = $total{used}/$total{total}*100 if($total{total} > 0);
+
     printf "  ---- ------------ ---------- ---------- ---------- ------\n";
     printf "             total:%10.3f %10.3f %10.3f %6.2f%%\n", (map { $total{$_} } qw(total used avail)), $pct;
 
@@ -465,7 +494,7 @@ sub cmd_stats {
     printf "  ---------- ----------- ---------- ----------\n";
 
     print "\nStatistics for file ids...\n";
-    printf "  Max file id: %s\n", $stats->{fids}->{max};
+    printf "  Max file id: %s\n", $stats->{fids}->{max} || 'none';
 
     print "\nStatistics for files...\n";
     printf "  %-20s %-10s %10s\n", 'domain', 'class', 'files';
@@ -762,6 +791,21 @@ sub cmd_device_mark {
     ok('Device updated.');
 }
 
+sub cmd_device_modify {
+    my $args = shift;
+    my $hostname = delete $args->{hostname};
+    my $devid = delete $args->{devid};
+
+    my $mogadm = mogadm();
+    $mogadm->update_device($hostname, $devid, $args);
+
+    if ($mogadm->err) {
+        fail('Error updating device: ' . $mogadm->errstr);
+    }
+
+    ok('Device updated.');
+}
+
 sub cmd_device_list {
     my $args = shift;
 
@@ -790,6 +834,41 @@ sub cmd_device_list {
     }
 
     ok();
+}
+
+sub cmd_device_summary {
+    my $args = shift;
+    my %show_state;
+    $show_state{$_} = 1 foreach split(/,/, ($args->{status} || "alive,readonly"));
+
+    my $hosts = hosts();
+    fail_text('no_hosts') unless $hosts;
+
+    my $devs = devices();
+    fail_text('no_devices') unless $devs;
+
+    printf "%-15s %6s %7s  %8s %8s %8s\n", 'Hostname', 'HostID', 'Status', 'used(G)', 'free(G)', 'total(G)';
+    foreach my $hostid (sort keys %$hosts) {
+        my $host = $hosts->{$hostid};
+        my ($total,$used) = (0, 0);
+
+        foreach my $devid (sort keys %{$devs->{$hostid} || {}}) {
+            my $dev = $devs->{$hostid}->{$devid};
+            next unless $show_state{$dev->{status}};
+
+            my $devtotal = $dev->{mb_total} / 1024;
+            my $devused  = $dev->{mb_used} / 1024;
+
+            $total += $devtotal;
+            $used  += $devused;
+        }
+        my $free = $total - $used;
+        printf "%-15s [%4d]: %6s", $host->{hostname}, $hostid, $host->{status};
+        printf "  %8.3f %8.3f %8.3f\n", $used, $free, $total;
+    }
+
+    ok();
+
 }
 
 sub cmd_slave_list {
@@ -1276,6 +1355,16 @@ Check to ensure that all of the MogileFS system components are functioning
 and that we can contact everybody.  The quickest way of ensuring that the
 entire MogileFS system is functional from the current machine's point of view.
 
+=item B<stats>
+
+Attempt to get statistics for the MogileFS world. This should provide
+statistics on: the number of files present on each device; the number of files
+in each (domain,class) tuple; statistics about present replication devcounts
+and pending replications.
+
+Due to design constraints, the stats command may presently fail if some
+statistic takes too long to generate.
+
 =item B<host add E<lt>hostE<gt> [host options]>
 
 =item B<host modify E<lt>hostE<gt> [host options]>
@@ -1290,19 +1379,19 @@ Functions for manipulating hosts.  For add and modify, host options is in
 the format of normal command line options and can include anything in the
 L</"HOST OPTIONS"> section.
 
-=item B<device add E<lt>hostE<gt> [device id]>
+=item B<device add E<lt>hostE<gt> E<lt>device idE<gt>>
 
 =item B<device mark E<lt>hostE<gt> E<lt>device idE<gt> E<lt>statusE<gt>>
+
+=item B<device modify E<lt>hostE<gt> E<lt>deviceE<gt> [device options]>
 
 =item B<device delete E<lt>hostE<gt> E<lt>deviceE<gt>>
 
 =item B<device list>
 
-Adding, editing, and deleting devices.  The device id is optional in the add
-command: if you provide one, it will be setup using the provided id; else, a
-new id is assigned and provided to you for setting up the device.
-
-When marking devices, the status can be one of {alive|down|dead|readonly}.
+Functions for manipulating devices. For add and modify, device options are in
+the format of normal command line options and can include anything in the
+L</"DEVICE OPTIONS"> section.
 
 =item B<domain add E<lt>domainE<gt>>
 
@@ -1329,13 +1418,45 @@ have no files in it before it will allow the deletion.
 
 Add/remove slaves replicating from MogileFS master database.
 
+TODO: detail this
+
 Run B<mogadm slave> by itself for contextual help.
 
-=item B<fsck ...>
+=item B<fsck printlog>
 
-Control a background filesystem check operation.
+=item B<fsck taillog>
 
-Run B<mogadm fsck> by itself for contextual help.
+=item B<fsck clearlog>
+
+Display or clear the log of fsck events.
+
+=item B<fsck reset [fsck options]>
+
+Reset fsck position back to the beginning.  Please see the L</"FSCK OPTIONS">
+section for options to use with fsck.
+
+=item B<fsck start>
+
+Start (or resume) background fsck from the last checked fid. If you want to
+check every fid, you must call B<fsck reset> before calling start.
+
+=item B<fsck status>
+
+Show the status of the presently active (or last if none active) fsck. This
+includes what FIDs are being checked, time statistics, check type as well as a
+summary of problems encounted so far.
+
+=item B<fsck stop>
+
+Stop (pause) background fsck
+
+=item B<settings list> 
+
+Display all present MogileFS settings.
+
+=item B<settings set E<lt>keyE<gt> E<lt>valueE<gt>>
+
+Set the server setting for 'key' to 'value'.
 
 =back
 
@@ -1367,7 +1488,22 @@ network.
 
 =item B<--status=E<lt>host statusE<gt>>
 
-Valid statuses are one of: alive, down, dead.
+Valid host statuses are one of: alive, down, dead.
+
+=back
+
+=head1 DEVICE OPTIONS
+
+=over 8
+
+=item B<--status=E<lt>device statusE<gt>>
+
+Valid device statuses are one of: alive, dead, down, drain, readonly.
+
+=item B<--weight=E<lt>device weight<gt>>
+
+The weight used in calculation of preferred paths. It must be a positive
+integer.
 
 =back
 
@@ -1379,6 +1515,17 @@ Valid statuses are one of: alive, down, dead.
 
 Number of devices the files in this class should be replicated across.  Can be
 set to anything >= 1.
+
+=back
+
+=head1 FSCK OPTIONS
+
+=over 8
+
+=item B<--policy-only>
+
+Check replication policy (assumed locations) only; don't stat storage nodes for
+actual file presence.
 
 =back
 
@@ -1396,9 +1543,12 @@ Host manipulation:
 Device manipulation:
 
     $ mogadm device list
+    $ mogadm device summary
+    $ mogadm device summary --status=dead,down
     $ mogadm device add foo.local 16
     $ mogadm device add foo.local 17 --status=alive
     $ mogadm device mark foo.local 17 down
+    $ mogadm device modify foo.local 17 --status=alive --weight=10
     $ mogadm device delete foo.local 17
 
 Domain manipulation:
@@ -1422,6 +1572,13 @@ Check the status of your entire MogileFS system:
 Check MogileFS system statistics:
 
     $ mogadm stats
+
+Check every file in the entire MogileFS system:
+
+    $ mogadm fsck reset
+    $ mogadm fsck start
+    $ mogadm fsck status
+    $ mogadm fsck printlog
 
 See all the things mogadm can do:
 
@@ -1451,6 +1608,8 @@ Brad Fitzpatrick E<lt>L<brad@danga.com>E<gt>
 Mark Smith E<lt>L<junior@danga.com>E<gt>
 
 Leon Brocard E<lt>L<acme@astray.com>E<gt>, open sourced permissions from Foxtons Ltd.
+
+Robin H. Johnson E<lt>robbat2@orbis-terrarum.netE<gt>
 
 =head1 BUGS
 
