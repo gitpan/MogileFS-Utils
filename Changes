@@ -1,3 +1,16 @@
+2.13 -- 2008-08-16
+
+  * Add --noreplwait option to mogtool. (Dormando)
+
+  * Make mogadm prefer command line settings over configuration file
+    settings (Derek Boonstra)
+
+  * Wire up fsck_reset's startpos argument. (Robin H. Johnson).
+
+  * Fix the automatic retry on errors saving a chunk (Ask Bjoern Hansen)
+
+  * Improve error messages from mogtool (Ask Bjoern Hansen).
+
 2.12 -- 2007-08-06
 
   * Update POD documentation for mogadm to state of present code.
