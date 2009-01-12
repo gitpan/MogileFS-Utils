@@ -20,6 +20,7 @@ mogtool -- Inject/extract data to/from a MogileFS installation
     $ mogtool inject --bigfile --gzip thebigfile.tar thefilekey
     $ mogtool inject --bigfile --gzip mydirectory thedirkey
     $ mogtool inject --bigfile --gzip /dev/hda4 thedevkey
+    $ mogtool inject --nobigfile bigcontiguousfile bigcfilekey
 
     $ mogtool inject --bigfile --gzip --verify \
                      --description="Description" \
@@ -557,7 +558,7 @@ abortWithUsage() unless
                'trackers=s'    => \$opts{trackers},
                'domain=s'      => \$opts{domain},
                'class=s'       => \$opts{class},
-               'config=s'      => \$opts{conf},
+               'config=s'      => \$opts{config},
                'help'          => \$opts{help},
                'debug'         => \$MogileFS::DEBUG,
                'lib'           => \$opts{lib},
@@ -565,6 +566,7 @@ abortWithUsage() unless
                # extract+inject options
                'gzip|z'        => \$opts{gzip},
                'bigfile|b'     => \$opts{big},
+               'nobigfile'     => \$opts{nobig},
 
                # inject options
                'overwrite'     => \$opts{overwrite},
@@ -581,14 +583,14 @@ abortWithUsage() unless
                );
 
 # now load the config file?
-my @confs = ( $opts{conf}, "$ENV{HOME}/.mogtool", "/etc/mogilefs/mogtool.conf" );
+my @confs = ( $opts{config}, "$ENV{HOME}/.mogtool", "/etc/mogilefs/mogtool.conf" );
 foreach my $conf (@confs) {
     next unless $conf && -e $conf;
     open FILE, "<$conf";
     foreach (<FILE>) {
         s!#.*!!;
         next unless m!(\w+)\s*=\s*(.+)!;
-        $opts{$1} = $2;
+        $opts{$1} = $2 unless $opts{$1};
     }
     close FILE;
 }
@@ -719,8 +721,16 @@ sub inject {
         die "Error: you specified to store a file of type $type but didn't specify --bigfile.  Please see documentation.\n"
             unless $opts{big};
     } elsif ($size > 64 * 1024 * 1024) {
-        die "Error: the file is more than 64MB and you didn't specify --bigfile.  Please see documentation.\n"
-            unless $opts{big};
+        die "Error: the file is more than 64MB and you didn't specify --bigfile.  Please see documentation, or use --nobigfile to disable large file chunking and allow large single file uploads\n"
+            unless $opts{big} || $opts{nobig};
+    }
+
+    if ($opts{big} && $opts{nobig}) {
+        die "Error: You cannot specify both --bigfile and --nobigfile\n";
+    }
+
+    if ($opts{nobigfile} && $opts{gzip}) {
+        die "Error: --gzip is not compatible with --nobigfile\n";
     }
 
     # see if there's already a pre file?
@@ -885,6 +895,20 @@ MSG
             or error("Error: unable to create gzip deflation stream", ERR_FATAL);
     }
 
+    my $upload_fh;
+    if ($opts{nobig}) {
+        eval {
+            $upload_fh = $mogfs->new_file($key, $opts{class}, $size);
+            unless (defined $upload_fh) {
+                die "Unable to create new file";
+            }
+        };
+        if (my $err = $@) {
+            error("ERROR: Unable to open file '$key': $err");
+            die "Giving up.\n";
+        }
+    }
+
     # read one meg chunks while we have data
     my $sum = 0;
     my $readbuf = '';
@@ -912,10 +936,20 @@ MSG
             next unless $rv;
         }
 
+        $sum += $rv;
+        # Short circuit if we're just plopping up a big file.
+        if ($opts{nobig}) {
+            $upload_fh->print($readbuf);
+            if ($size) {
+                printf "Upload so far: $sum bytes [%.2f%% complete]\n",
+                    ($sum / $size * 100);
+            }
+            next;
+        }
+
         # now stick our data into our real buffer
         $buf .= $readbuf;
         $bufsize += $rv;
-        $sum += $rv;
         $readbuf = '';
 
         # generate output
@@ -926,7 +960,7 @@ MSG
         }
 
         # if we have one chunk, handle it
-        if ($bufsize >= $chunk_size) {
+        if ($opts{big} && $bufsize >= $chunk_size) {
             $chunkbuf{++$chunknum} = substr($buf, 0, $chunk_size);
 
             # calculate the md5, print out status, and save this chunk
@@ -978,9 +1012,9 @@ MSG
 
     # verify replication and chunks
     my %paths; # { chunknum => [ path, path, path ... ] }
-    my %still_need = $opts{noreplwait} ? () : ( %chunkinfo );
+    my %still_need = ( %chunkinfo );
     while (%still_need) {
-        print "Replicating (disable with --noreplwait): " . join(' ', sort { $a <=> $b } keys %still_need) . "\n";
+        print "Replicating: " . join(' ', sort { $a <=> $b } keys %still_need) . "\n";
         sleep 1; # give things time to replicate some
 
         # now iterate over each and get the paths
@@ -1022,7 +1056,7 @@ MSG
                 }
 
                 # now make sure %paths contains at least 2 verified
-                next unless scalar(@{$paths{$num} || []}) >= 2;
+                next if scalar(@{$paths{$num} || []}) < 2 && !$opts{noreplwait};
                 delete $still_need{$num};
             }
         }
@@ -1077,6 +1111,19 @@ INFO
         print "Deleting pre-insert file...\n";
         $mogfs->delete("_big_pre:$key")
             or error("ERROR: Unable to delete _big_pre:$key", ERR_FATAL);
+    }
+
+    # Wrap up the non big file...
+    if ($opts{nobig}) {
+        eval {
+            unless ($upload_fh->close) {
+                die "Close failed";
+            }
+        };
+        if (my $err = $@) {
+            error("ERROR: Unable to close file '$key': $err");
+            die "Giving up.\n";
+        }
     }
 
     # now email and save a receipt
@@ -1302,9 +1349,7 @@ sub list {
 }
 
 sub listkey {
-
-    my $key_pattern = shift(@ARGV);
-    abortWithUsage("key pattern required") unless $key_pattern;
+    my $key_pattern = shift(@ARGV) || '';
 
     # list all files matching a key
     my ($ct, $after, $list);
