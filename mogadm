@@ -13,7 +13,7 @@ my $usage = {
         des => "Check the state of the MogileFS world.",
     },
     stats => {
-        des => "Show MogileFS system statistics.",
+        des => "Show MogileFS system statistics.  (DEPRECIATED: use mogstats instead)",
     },
     settings => {
         des => "Change/list server settings.",
@@ -453,8 +453,9 @@ sub cmd_check {
                 $data{age} = $now - $data{time};
                 $data{used} /= 1024**2;
                 $data{total} /= 1024**2;
-                $data{avail} = $data{total} - $data{used};
-                my $pct = $data{used}/$data{total}*100;
+                $data{available} /= 1024**2;
+                $data{avail} = $data{available};
+                my $pct = 100 - $data{available}/$data{total}*100;
                 $total{used} += $data{used};
                 $total{avail} += $data{avail};
                 $total{total} += $data{total};
@@ -472,7 +473,7 @@ sub cmd_check {
     }
     my $pct = 0;
     # Avoid division by zero
-    $pct = $total{used}/$total{total}*100 if($total{total} > 0);
+    $pct = 100 - $total{avail}/$total{total}*100 if($total{total} > 0);
 
     printf "  ---- ------------ ---------- ---------- ---------- ------\n";
     printf "             total:%10.3f %10.3f %10.3f %6.2f%%\n", (map { $total{$_} } qw(total used avail)), $pct;
@@ -482,6 +483,7 @@ sub cmd_check {
 }
 
 sub cmd_stats {
+    fail("mogadm stats is deprecated by new 'mogstats' utility");
     print "Fetching statistics...\n";
     my $stats = stats()
         or fail("Can't fetch stats");
@@ -849,7 +851,7 @@ sub cmd_device_summary {
     my $devs = devices();
     fail_text('no_devices') unless $devs;
 
-    printf "%-15s %6s %7s  %8s %8s %8s\n", 'Hostname', 'HostID', 'Status', 'used(G)', 'free(G)', 'total(G)';
+    printf "%-15s %6s %7s  %8s %8s %8s %8s\n", 'Hostname', 'HostID', 'Status', 'used(G)', 'free(G)', 'total(G)', '%Used';
     foreach my $hostid (sort keys %$hosts) {
         my $host = $hosts->{$hostid};
         my ($total,$used) = (0, 0);
@@ -866,7 +868,9 @@ sub cmd_device_summary {
         }
         my $free = $total - $used;
         printf "%-15s [%4d]: %6s", $host->{hostname}, $hostid, $host->{status};
-        printf "  %8.3f %8.3f %8.3f\n", $used, $free, $total;
+        printf "  %8.3f %8.3f %8.3f ", $used, $free, $total;
+        printf "%8.2f", 100*$used/$total if $total;
+        print "\n";
     }
 
     ok();
@@ -1227,8 +1231,12 @@ sub mogadm {
     } else {
         $host = $opts{trackers};
     }
+    # 10 seconds is the max time used for any of the admin locks (fsck status)
+    # plus we leave a bit of time for work.
+    my $timeout = 15; 
+    $timeout = $opts{timeout} if $opts{timeout} && $opts{timeout} =~ /^[0-9]+$/;
 #    $MogileFS::DEBUG = 2;
-    my $mogadm = MogileFS::Admin->new( hosts => $host );
+    my $mogadm = MogileFS::Admin->new( hosts => $host, timeout => $timeout );
     fail_text('no_mogadm') unless $mogadm;
     return $mogadm;
 }
@@ -1460,6 +1468,10 @@ Display all present MogileFS settings.
 =item B<settings set E<lt>keyE<gt> E<lt>valueE<gt>>
 
 Set the server setting for 'key' to 'value'.
+
+The current settings are E<lt>enable_rebalanceE<gt> (set to 1 to start
+rebalance mode to move files to under-used devices) and
+E<lt>memcache_serversE<gt> (enable memcached caching in the tracker).
 
 =back
 

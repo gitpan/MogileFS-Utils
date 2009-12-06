@@ -1,3 +1,13 @@
+2.15 -- 2009-12-05
+
+  * Standalone mogstats utility (dormando)
+
+  * New mogilefs.conf option: timeout (Robin H. Johnson)
+
+  * Make --noverify a valid option for locate (Ask Bjoern Hansen)
+
+  * Make the locate command return all replicas, not just two (Gavin Brebner)
+
 2.14 -- 2009-01-12
 
   * Add --nobigfile option to skip bigfile parsing on large files. (dormando)
