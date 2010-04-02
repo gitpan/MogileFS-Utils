@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               MogileFS-Utils
-version:            2.15
+version:            2.16
 abstract:           MogileFS utilities
 author:
     - Brad Fitzpatrick <brad@danga.com>
@@ -13,12 +13,12 @@ build_requires:
 requires:
     Compress::Zlib:    0
     LWP::Simple:       0
-    MogileFS::Client:  1.10
+    MogileFS::Client:  1.11
 no_index:
     directory:
         - t
         - inc
-generated_by:       ExtUtils::MakeMaker version 6.54
+generated_by:       ExtUtils::MakeMaker version 6.56
 meta-spec:
     url:      http://module-build.sourceforge.net/META-spec-v1.4.html
     version:  1.4
