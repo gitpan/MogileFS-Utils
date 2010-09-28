@@ -7,13 +7,13 @@ use Getopt::Long;
 use LWP::Simple;  # FIXME: use of this makes 'mog check' hang too long when multiple things down
 use Socket;
 
-my @topcmds = qw(check stats host device domain class slave fsck settings);
+my @topcmds = qw(check stats host device domain class slave fsck rebalance settings);
 my $usage = {
     check => {
         des => "Check the state of the MogileFS world.",
     },
     stats => {
-        des => "Show MogileFS system statistics.  (DEPRECIATED: use mogstats instead)",
+        des => "Show MogileFS system statistics.  (DEPRECATED: use mogstats instead)",
     },
     settings => {
         des => "Change/list server settings.",
@@ -209,6 +209,36 @@ my $usage = {
             delete => {
                 des => 'Delete a slave node for store usage',
                 args => '<slave_key>',
+            },
+        },
+    },
+    rebalance => {
+        des => "Control file rebalancing operations.",
+        subcmd => {
+            start => {
+                des => 'Start a rebalance job',
+            },
+            stop => {
+                des => 'Stop a rebalance job',
+            },
+            status => {
+                des => 'Show status of current rebalance job',
+            },
+            settings => {
+                des => 'Display rebalance settings',
+            },
+            test => {
+                des => 'Show what devices the current policy would match',
+            },
+            reset => {
+                des => 'Reset an existing policy',
+            },
+            policy => {
+                des => 'Add or adjust the current policy',
+                args => '[opts]',
+                opts => {
+                    '--options=s' => "Policy string (see docs/wiki for details)",
+                },
             },
         },
     },
@@ -486,49 +516,6 @@ sub cmd_check {
 
 sub cmd_stats {
     fail("mogadm stats is deprecated by new 'mogstats' utility");
-    print "Fetching statistics...\n";
-    my $stats = stats()
-        or fail("Can't fetch stats");
-
-    print "\nStatistics for devices...\n";
-    printf "  %-10s %-10s %10s %10s\n", "device", "host", "files", "status";
-    printf "  ---------- ----------- ---------- ----------\n";
-    foreach my $device (sort { $a <=> $b } keys %{$stats->{devices}}) {
-        my $value = $stats->{devices}->{$device};
-        printf "  %-10s %-10s %10s %10s\n", "dev$device", $value->{host}, $value->{files}, $value->{status};
-    }
-    printf "  ---------- ----------- ---------- ----------\n";
-
-    print "\nStatistics for file ids...\n";
-    printf "  Max file id: %s\n", $stats->{fids}->{max} || 'none';
-
-    print "\nStatistics for files...\n";
-    printf "  %-20s %-10s %10s\n", 'domain', 'class', 'files';
-    printf "  -------------------- ----------- ----------\n";
-    foreach my $domain (sort keys %{$stats->{files}}) {
-        my $classes = $stats->{files}->{$domain};
-        foreach my $class (sort keys %$classes) {
-            my $files = $classes->{$class};
-            printf "  %-20s %-10s %10s\n", $domain, $class, $files;
-        }
-    }
-    printf "  -------------------- ----------- ----------\n";
-
-    print "\nStatistics for replication...\n";
-    printf "  %-20s %-10s %10s %10s\n", 'domain', 'class', 'devcount', 'files';
-    printf "  -------------------- ----------- ---------- ----------\n";
-    foreach my $domain (sort keys %{$stats->{replication}}) {
-        my $classes = $stats->{replication}->{$domain};
-        foreach my $class (sort keys %$classes) {
-            my $devcounts = $classes->{$class};
-            foreach my $devcount (sort { $a <=> $b } keys %$devcounts) {
-                my $files = $devcounts->{$devcount};
-                printf "  %-20s %-10s %10s %10s\n", $domain, $class, $devcount, $files;
-            }
-        }
-    }
-    printf "  -------------------- ----------- ---------- ----------\n";
-    ok();
 }
 
 sub cmd_host_list {
@@ -789,6 +776,7 @@ sub cmd_device_add {
 sub cmd_device_mark {
     my $args = shift;
 
+    print "***NOTE***: As of server version 2.40 'drain' has changed. See docs/wiki\n";
     my $mogadm = mogadm();
     $mogadm->change_device_state($args->{hostname},
                                  $args->{devid},
@@ -805,6 +793,7 @@ sub cmd_device_modify {
     my $hostname = delete $args->{hostname};
     my $devid = delete $args->{devid};
 
+    print "***NOTE***: As of server version 2.40 'drain' has changed. See docs/wiki\n";
     my $mogadm = mogadm();
     $mogadm->update_device($hostname, $devid, $args);
 
@@ -935,6 +924,81 @@ sub cmd_slave_delete {
         ok("Slave deleted");
     } else {
         fail("Slave delete failed");
+    }
+}
+
+sub cmd_rebalance_start {
+    my $mogadm = mogadm();
+    my $res = $mogadm->rebalance_start || fail($mogadm->errstr);
+    ok("rebalance started");
+}
+
+sub cmd_rebalance_stop {
+    my $mogadm = mogadm();
+    my $res = $mogadm->rebalance_stop || fail($mogadm->errstr);
+    ok("rebalance stopped");
+}
+
+sub cmd_rebalance_reset {
+    my $mogadm = mogadm();
+    my $res = $mogadm->rebalance_reset || fail($mogadm->errstr);
+    ok("rebalance reset");
+}
+
+# TODO: Make output prettier? Put hostname next to device name, print device
+# info?
+sub cmd_rebalance_test {
+    my $mogadm = mogadm();
+    my $res = $mogadm->rebalance_test || fail($mogadm->errstr);
+    print "Tested rebalance policy...\n";
+    my $s = $mogadm->server_settings;
+    print "Policy: ", $s->{rebal_policy}, "\n\n";
+    print "Source devices:\n";
+    for my $dev (sort split /,/, $res->{sdevs}) {
+        print " - ", $dev, "\n";
+    }
+    print "Destination devices:\n";
+    for my $dev (sort split /,/, $res->{ddevs}) {
+        print " - ", $dev, "\n";
+    }
+}
+
+sub cmd_rebalance_status {
+    my $mogadm = mogadm();
+
+    my $ss  = $mogadm->server_settings or fail ($mogadm->errstr);
+    my $res = $mogadm->rebalance_status or fail ($mogadm->errstr);
+    if ($ss->{rebal_host}) {
+        print "Rebalance is running\n";
+    } else {
+        print "Rebalance is stopped\n";
+    }
+    print "Rebalance status:\n";
+    for my $o (sort split /\s+/, $res->{state}) {
+        my ($k, $v) = split /=/, $o;
+        printf("%25s = %-s\n", $k, $v);
+    }
+}
+
+sub cmd_rebalance_policy {
+    my $mogadm = mogadm();
+    my $args   = shift;
+
+    my $res = $mogadm->rebalance_set_policy($args->{options})
+        or fail($mogadm->errstr);
+
+    ok("changed policy setting");
+}
+
+sub cmd_rebalance_settings {
+    my $mogadm = mogadm();
+
+    my $ss = $mogadm->server_settings
+        or fail("can't get settings");
+    foreach my $k (sort keys %$ss) {
+        next unless ($k =~ '^rebal_');
+        next if ($k eq 'rebal_state');
+        printf("%25s = %-s\n", $k, $ss->{$k});
     }
 }
 
@@ -1070,6 +1134,8 @@ sub cmd_settings_list {
     my $ss = $mogadm->server_settings
         or fail("can't get settings");
     foreach my $k (sort keys %$ss) {
+        # Don't list noisy "setting"
+        next if ($k =~ '^rebal');
         printf("%25s = %-s\n", $k, $ss->{$k});
     }
 }

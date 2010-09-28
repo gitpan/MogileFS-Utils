@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               MogileFS-Utils
-version:            2.17
+version:            2.18
 abstract:           MogileFS utilities
 author:
     - Brad Fitzpatrick <brad@danga.com>
@@ -13,7 +13,7 @@ build_requires:
 requires:
     Compress::Zlib:    0
     LWP::Simple:       0
-    MogileFS::Client:  1.11
+    MogileFS::Client:  1.13
 no_index:
     directory:
         - t
