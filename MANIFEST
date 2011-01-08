@@ -6,4 +6,11 @@ lib/MogileFS/Utils.pm
 mogtool
 mogadm
 mogstats
+mogupload
+mogdelete
+mogfetch
+mogfileinfo
+moglistfids
+moglistkeys
+mogfiledebug
 META.yml                                 Module meta-data (added by MakeMaker)

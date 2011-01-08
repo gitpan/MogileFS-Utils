@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               MogileFS-Utils
-version:            2.18
+version:            2.19
 abstract:           MogileFS utilities
 author:
     - Brad Fitzpatrick <brad@danga.com>
@@ -13,7 +13,12 @@ build_requires:
 requires:
     Compress::Zlib:    0
     LWP::Simple:       0
-    MogileFS::Client:  1.13
+    MogileFS::Client:  1.14
+resources:
+    bugtracker:   http://code.google.com/p/mogilefs/issues/list
+    homepage:     http://www.mogilefs.org
+    MailingList:  http://groups.google.com/group/mogile
+    repository:   git://github.com/mogilefs/MogileFS-Utils.git
 no_index:
     directory:
         - t

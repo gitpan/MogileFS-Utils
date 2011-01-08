@@ -5,6 +5,125 @@
 # timing output during fetch
 # support different db backends better (something mildly generic).
 
+=head1 NAME
+
+mogstats -- Utility for calculating slow stats directly against a MogileFS DB
+
+=head1 SYNOPSIS
+
+    $ mogstats --db_dsn="DBI:mysql:mfs:host=mfshost" --db_user="mfs" \
+               --db_pass="mfs" --verbose --stats="devices,files"
+    $ mogstats --stats="all"
+    $ mogstats [all options in ~/.mogilefs.conf]
+
+=head1 DESCRIPTION
+
+Utility for inspecting queues and running general statistics against a
+MogileFS database. Some of these stats can take a very long time to run
+against a large instance, so the utility can be pointed at a read slave or
+special account.
+
+=head1 OPTIONS
+
+=over
+
+=item --db_dsn=<DBI_dsn>
+
+The DSN to use for connecting to the MogileFS database server.
+
+=item --db_user=<username>
+
+A database user for connecting to the database.
+
+=item --db_pass=<password>
+
+An optional password for the database user.
+
+=item --config=<file>
+
+An explicit config file to use. By default /etc/mogilefs/mogilefs.conf and
+~/.mogilefs.conf are checked.
+
+=item --verbose
+
+Print some extra text during processing. Mostly notes about what stats are
+starting or finishing.
+
+=item --stats=<stats>
+
+A list of which statistics to calculate. Notes on some of them are listed
+below, see --help for full list. A value of "all" fetches all possible stats.
+
+=item --help
+
+List usage info and supported statistics.
+
+=back 
+
+=head1 AVAILABLE STATISTICS
+
+Contains notes on which stats may be fast or slow.
+
+=over
+
+=item devices
+
+Lists count of files and current database status per-device. Can be very slow.
+
+=item fids
+
+Lists the current highest file id. Should be fast.
+
+=item files
+
+Gives a breakdown of where files are by domain and class. Displays the size of
+all stored files pre-replication, as well as post-replication size. The latter
+being closer to the actual storage amount. Can be very slow.
+
+=item domains
+
+Shows a simple count of where files are by domain and class. Faster than using
+"files" but displays less information.
+
+=item replication
+
+Displays a breakdown of devcount per domain/class combo. Shows number of files
+in domain "foo" with class "bar" that have a current devcount of 0, 1, 2, 3,
+etc. Useful for spotting broken files (devcount 0), replication lag, or over
+replication bugs. Can be very slow.
+
+=item replication-queue
+
+Quick breakdown of how many fids are due for replication. Fids listed as
+"manual" need manual intervention before they can be replicated, and could be
+broken. Will be fast unless there are many files in queue.
+
+=item delete-queue
+
+Similar to replication-queue.
+
+=item general-queue
+
+Displays a breakdown of what's in the general queue. This includes FSCK,
+Rebalance, and other temporary queueing systems MogileFS has. Should be fast
+unless you have configured MogileFS to queue many fids at once.
+
+=back
+
+=head1 AUTHOR
+
+Dormando E<lt>L<dormando@rydia.net>E<gt>
+
+=head1 BUGS
+
+None known.
+
+=head1 LICENSE
+
+Licensed for use and redistribution under the same terms as Perl itself.
+
+=cut
+
 use strict;
 use warnings;
 use DBI;
@@ -12,7 +131,7 @@ use Getopt::Long;
 
 # FIXME: decide how to share constants between utils and server.
 use constant ENDOFTIME => 2147483647;
-my %QUEUES = ( 1 => 'FSCK_QUEUE' );
+my %QUEUES = ( 1 => 'FSCK_QUEUE', 2 => 'REBAL_QUEUE' );
 my %valid_stats = map { $_ => 1 } qw/devices fids files domains replication replication-queue delete-queue general-queues all/;
 
 my $DBH_CACHE = '';
@@ -20,6 +139,7 @@ my $DB_TYPE = '';
 
 my %opts;
 
+# FIXME: Use MogileFS::Utils for configuration junk.
 Getopt::Long::Configure("require_order", "pass_through");
 GetOptions(
         "config=s"   => \$opts{config},
@@ -302,6 +422,13 @@ sub stats_for_devices {
     return $devs;
 }
 
+sub stats_for_files_sql {
+    my $sql = 'SELECT dmid, classid, COUNT(classid), sum(length), sum(length::int4 * devcount::int4) FROM file GROUP BY 1, 2';
+    return $sql if ($DB_TYPE eq 'Postgres');
+    $sql =~ s/::int4//g;
+    return $sql;
+}
+
 sub stats_for_files {
     my $globals = shift;
     my %classes = %{$globals->{classes}};
@@ -309,7 +436,7 @@ sub stats_for_files {
     my $dbh = get_dbh() or die "Could not get database handle";
 
     verbose("... files stats...");
-    my $stats = $dbh->selectall_arrayref('SELECT dmid, classid, COUNT(classid), sum(length), sum(length * devcount) FROM file GROUP BY 1, 2');
+    my $stats = $dbh->selectall_arrayref(stats_for_files_sql());
     my $files = {};
     for my $stat (@$stats) {
         my $domain  = $classes{$stat->[0]}->{name};
