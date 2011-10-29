@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               MogileFS-Utils
-version:            2.20
+version:            2.21
 abstract:           MogileFS utilities
 author:
     - Brad Fitzpatrick <brad@danga.com>
