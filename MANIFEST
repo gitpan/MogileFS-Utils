@@ -13,4 +13,5 @@ mogfileinfo
 moglistfids
 moglistkeys
 mogfiledebug
+mogrename
 META.yml                                 Module meta-data (added by MakeMaker)
