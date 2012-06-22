@@ -1,29 +1,29 @@
---- #YAML:1.0
-name:               MogileFS-Utils
-version:            2.23
-abstract:           MogileFS utilities
+---
+abstract: 'MogileFS utilities'
 author:
-    - Brad Fitzpatrick <brad@danga.com>
-license:            unknown
-distribution_type:  module
-configure_requires:
-    ExtUtils::MakeMaker:  0
+  - 'Brad Fitzpatrick <brad@danga.com>'
 build_requires:
-    ExtUtils::MakeMaker:  0
-requires:
-    Compress::Zlib:    0
-    LWP::Simple:       0
-    MogileFS::Client:  1.16
-resources:
-    bugtracker:   http://code.google.com/p/mogilefs/issues/list
-    homepage:     http://www.mogilefs.org
-    MailingList:  http://groups.google.com/group/mogile
-    repository:   git://github.com/mogilefs/MogileFS-Utils.git
-no_index:
-    directory:
-        - t
-        - inc
-generated_by:       ExtUtils::MakeMaker version 6.55_02
+  ExtUtils::MakeMaker: 0
+configure_requires:
+  ExtUtils::MakeMaker: 0
+dynamic_config: 1
+generated_by: 'ExtUtils::MakeMaker version 6.62, CPAN::Meta::Converter version 2.112621'
+license: unknown
 meta-spec:
-    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
-    version:  1.4
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: MogileFS-Utils
+no_index:
+  directory:
+    - t
+    - inc
+requires:
+  Compress::Zlib: 0
+  LWP::Simple: 0
+  MogileFS::Client: 1.16
+resources:
+  bugtracker: http://code.google.com/p/mogilefs/issues/list
+  homepage: http://www.mogilefs.org
+  repository: git://github.com/mogilefs/MogileFS-Utils.git
+  x_MailingList: http://groups.google.com/group/mogile
+version: 2.24
