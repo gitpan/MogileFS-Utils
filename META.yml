@@ -26,4 +26,4 @@ resources:
   homepage: http://www.mogilefs.org
   repository: git://github.com/mogilefs/MogileFS-Utils.git
   x_MailingList: http://groups.google.com/group/mogile
-version: 2.26
+version: 2.27
