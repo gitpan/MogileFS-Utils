@@ -91,7 +91,7 @@ my $usage = {
                 des => "List the summary of devices, for each host.",
                 args => "[opts]",
                 opts => {
-                    "--status=s"  => "Devices of status A. Defaults to 'alive,readonly'",
+                    "--status=s"  => "Devices of status A. Defaults to 'alive,readonly,drain'",
                     "--hostname=s" => "Limit results to a given host.",
                 },
             },
@@ -769,10 +769,17 @@ sub cmd_device_add {
     ok('Device added.');
 }
 
+sub warn_on_drain {
+    my $args = shift;
+    if ($args->{status} && $args->{status} eq 'drain') {
+        print "***NOTE***: As of server version 2.40 'drain' has changed. See docs/wiki\n";
+    }
+}
+
 sub cmd_device_mark {
     my $args = shift;
 
-    print "***NOTE***: As of server version 2.40 'drain' has changed. See docs/wiki\n";
+    warn_on_drain($args);
     my $mogadm = mogadm();
     $mogadm->change_device_state($args->{hostname},
                                  $args->{devid},
@@ -789,7 +796,7 @@ sub cmd_device_modify {
     my $hostname = delete $args->{hostname};
     my $devid = delete $args->{devid};
 
-    print "***NOTE***: As of server version 2.40 'drain' has changed. See docs/wiki\n";
+    warn_on_drain($args);
     my $mogadm = mogadm();
     $mogadm->update_device($hostname, $devid, $args);
 
@@ -817,7 +824,7 @@ sub cmd_device_list {
         }
         print "$host->{hostname} [$hostid]: $host->{status}\n";
 
-        printf "%6s  %-10s %7s %7s %7s %7s\n", '', '', 'used(G)', 'free(G)', 'total(G)', 'weight(%)';
+        printf "%7s  %-7s %10s %10s %10s %10s\n", '', '', 'used(G)', 'free(G)', 'total(G)', 'weight(%)';
         foreach my $devid (sort keys %{$devs->{$hostid} || {}}) {
             my $dev = $devs->{$hostid}->{$devid};
             next if $dev->{status} eq "dead" && ! $args->{all};
@@ -825,7 +832,7 @@ sub cmd_device_list {
             my $total = $dev->{mb_total} / 1024;
             my $used = $dev->{mb_used} / 1024;
             my $free = $total - $used;
-            printf "%6s: %-10s %-7.3f %-7.3f %-7.3f  % 3u\n", "dev$devid", $dev->{status}, $used, $free, $total, $dev->{weight};
+            printf "%7s: %7s %10.3f %10.3f %10.3f %10u\n", "dev$devid", $dev->{status}, $used, $free, $total, $dev->{weight};
         }
 
         print "\n";
@@ -838,7 +845,7 @@ sub cmd_device_summary {
     my $args = shift;
     my $hostname = $args->{hostname};
     my %show_state;
-    $show_state{$_} = 1 foreach split(/,/, ($args->{status} || "alive,readonly"));
+    $show_state{$_} = 1 foreach split(/,/, ($args->{status} || "alive,readonly,drain"));
 
     my $hosts = hosts();
     fail_text('no_hosts') unless $hosts;
@@ -1230,9 +1237,11 @@ sub text {
 
         ######################################################################
         cant_find_module => <<END,
-Unable to find MogileFS::Admin module.  Please ensure that you have the
-module installed in a location in your search path.  Or, add a search path
-to mogadm:
+Error loading modules: $@
+
+Please ensure that you have the MogileFS::Admin and MogileFS::Client
+modules and all necessary dependencies installed in a location in your
+search path.  Or, add a search path to mogadm:
 
     mogadm --lib=/path/to/lib
 
